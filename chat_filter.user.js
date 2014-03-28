@@ -5,7 +5,7 @@
 
 // @include     /^https?://(www|beta)\.twitch\.tv\/(twitchplayspokemon(/(chat.*)?)?|chat\/.*channel=twitchplayspokemon.*)$/
 
-// @version     2.2
+// @version     2.3
 // @updateURL   http://jpgohlke.github.io/twitch-chat-filter/chat_filter.user.js
 // @grant       unsafeWindow
 // ==/UserScript==
@@ -55,11 +55,11 @@
 /* global unsafeWindow:false */
 /* jshint lastsemic:true */
 
-var version = "2.2" ;
-var info = "Chat Filter version " + version + " loaded. Please report bugs and suggestions to http://github.com/jpgohlke/twitch-chat-filter";
-
 (function(){
 "use strict";
+
+var version = "2.3" ;
+var info = "Chat Filter version " + version + " loaded. Please report bugs and suggestions to http://github.com/jpgohlke/twitch-chat-filter";
 
 // --- Script configuration ---
 
@@ -67,6 +67,7 @@ var TPP_COMMANDS = [
     "left", "right", "up", "down",
     "start", "select",
     "a", "b",
+    "l", "r",
     "democracy", "anarchy", "wait"
 ];
 
@@ -107,9 +108,12 @@ var CUSTOM_BANNED_PHRASES = localStorage.getItem("tpp-custom-filter-phrases") ? 
 var CUSTOM_BANNED_USERS = localStorage.getItem("tpp-custom-filter-users") ? JSON.parse(localStorage.getItem("tpp-custom-filter-users")) : [];
 
 var MINIMUM_DISTANCE_ERROR = 2; // Number of insertions / deletions / substitutions away from a blocked word.
-var MAXIMUM_NON_ASCII_CHARACTERS = 2; // For donger smilies, etc
+var MAXIMUM_NON_ASCII_CHARACTERS = 3; // For ascii art
+var MAXIMUM_DONGER_CHARACTERS = 1; // For donger smilies
 var MINIMUM_MESSAGE_WORDS = 2; // For Kappas and other short messages.
 var MAXIMUM_MESSAGE_CHARS = 200; // For messages that fill up more than 4 lines
+
+var DONGER_CODES = [3720, 9685, 664, 8362, 3232, 176, 8248, 8226, 7886, 3237] //typical unicodes of dongers (mostly eyes)
 
 // The regexp Twitch uses to detect and automatically linkify URLs, with some modifications
 // so we can blacklist more messages.
@@ -170,19 +174,9 @@ function min_edit(a, b) {
     return matrix[b.length][a.length];
 }
 
-//This regex recognizes messages that contain exactly a chat command,
-//without any extra words around. This includes compound democracy mode
-//commands like `up2left4` and `start9`.
-// (remember to escape the backslashes when building a regexes from strings!)
-var compound_command_regex = new RegExp("^((" + TPP_COMMANDS.join("|") + ")\\d*)+$", "i");
-
 function word_is_command(word){
-
-    if(compound_command_regex.test(word)) return true;
-
     for(var j=0; j<TPP_COMMANDS.length; j++){
         var cmd = TPP_COMMANDS[j];
-
         if(min_edit(cmd, word) <= MINIMUM_DISTANCE_ERROR){
            return true;
         }
@@ -193,7 +187,7 @@ function word_is_command(word){
 function message_is_command(message, sender){
     message = message.toLowerCase();
 
-    var segments = message.split(/[\d\s]+/);
+    var segments = message.split(/[\d\+\s]+/);
 
     for(var i=0; i<segments.length; i++){
         var segment = segments[i];
@@ -275,9 +269,22 @@ function message_is_forbidden_link(message, sender){
 }
 
 function message_is_donger(message, sender){
+    var donger_count = 0;
+    for(var i = 0; i < message.length; i++) {
+        if(DONGER_CODES.indexOf(message.charCodeAt(i)) != -1) {
+            donger_count++;
+            if(donger_count > MAXIMUM_DONGER_CHARACTERS){
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function message_is_ascii(message, sender){
     var nonASCII = 0;
     for(var i = 0; i < message.length; i++) {
-        if(message.charCodeAt(i) > 127) {
+        if(message.charCodeAt(i) >= 9600 && message.charCodeAt(i) <= 9632) {
             nonASCII++;
             if(nonASCII > MAXIMUM_NON_ASCII_CHARACTERS){
                 return true;
@@ -308,6 +315,11 @@ function convert_copy_paste(message){
     return message.replace(/(.{4}.*?)(\s*?\1)+/g, "$1");
 }
 
+//removes unicode characters that are used to cover following lines (Oops I spilled my drink)
+function mop_up_drinks(message){
+    return message.replace(/[\u0300-\u036F]/g, '');
+}
+
 // --- Filtering ---
 
 $(function(){
@@ -334,8 +346,14 @@ var filters = [
     predicate: message_is_forbidden_link
   },
 
+  { name: 'TppFilterAscii',
+    comment: "Ascii art",
+    isActive: true,
+    predicate: message_is_ascii
+  },
+  
   { name: 'TppFilterDonger',
-    comment: "Ascii art and dongers",
+    comment: "Dongers",
     isActive: false,
     predicate: message_is_donger
   },
@@ -380,6 +398,11 @@ var rewriters = [
     comment: "Copy pasted repetitions",
     isActive: true,
     rewriter: convert_copy_paste
+  },
+  { name: 'TppMopUpDrinks',
+    comment: "Mop up spilled drinks",
+    isActive: false,
+    rewriter: mop_up_drinks
   },
 ];
 
